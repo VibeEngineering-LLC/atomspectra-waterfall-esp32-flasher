@@ -122,7 +122,9 @@ def _download(url: str, dest: Path, size: int, progress_cb: Callable[[int, int],
                         progress_cb(downloaded, size)
 
 
-def _verify_sha(path: Path, expected: str) -> bool:
+def _verify_sha(path: Path, expected: str | None) -> bool:
+    if not expected:
+        return True  # SHA не опубликован в release body → пропускаем (HTTPS integrity)
     sha256 = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
