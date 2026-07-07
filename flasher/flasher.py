@@ -62,7 +62,7 @@ def _run_esptool(argv: list[str], log: LogCB) -> bool:
     writer = _LineWriter(log)
     try:
         with redirect_stdout(writer), redirect_stderr(writer):
-            esptool.main(argv)
+            rc = esptool.main(argv)
     except SystemExit as e:
         writer.flush()
         code = int(e.code or 0)
@@ -73,6 +73,9 @@ def _run_esptool(argv: list[str], log: LogCB) -> bool:
         log(f"[ОШИБКА esptool] {type(e).__name__}: {e}")
         return False
     writer.flush()
+    if isinstance(rc, int):
+        log(f"[esptool] rc={rc}")
+        return rc == 0
     return True
 
 
@@ -88,15 +91,20 @@ def erase(project: Project, port: str, log: LogCB, baud: int = 460800) -> bool:
 
 
 def flash(project: Project, port: str, log: LogCB, baud: int = 921600,
-          erase_first: bool = False) -> bool:
+          erase_first: bool = False,
+          phase: LogCB | None = None) -> bool:
     for seg in project.segments:
         if not seg.path.is_file():
             log(f"[ОШИБКА] нет файла: {seg.path}")
             return False
     if erase_first:
+        if phase is not None:
+            phase("erase")
         log("[flasher] полный сброс: стираю всю flash-память (~30-60с)…")
         if not erase(project, port, log, baud=460800):
             return False
+    if phase is not None:
+        phase("write")
     argv = _build_argv(project, port, baud)
     log(f"[esptool] {' '.join(argv)}")
     return _run_esptool(argv, log)

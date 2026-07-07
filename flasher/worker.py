@@ -9,6 +9,7 @@ from .projects import Project
 
 class FlashWorker(QThread):
     log = Signal(str)
+    phase = Signal(str)
     done = Signal(bool)
 
     def __init__(self, project: Project, port: str, baud: int = 921600,
@@ -21,5 +22,5 @@ class FlashWorker(QThread):
 
     def run(self) -> None:
         ok = flash(self._project, self._port, self.log.emit, self._baud,
-                   erase_first=self._erase)
+                   erase_first=self._erase, phase=self.phase.emit)
         self.done.emit(ok)

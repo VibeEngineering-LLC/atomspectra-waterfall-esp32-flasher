@@ -1,4 +1,9 @@
-"""Автодетект COM-портов ESP32. Фильтр CH340/CP210/FTDI. Блэклист SoundBlaster (COM5)."""
+"""Автодетект COM-портов ESP32.
+
+Фильтр по chip-keyword в описании (CH340/CP210/FTDI/CH343). Блэклист — по keyword
+в description (sound/audio/blaster/printer/mouse/wacom), не по номеру порта.
+На разных машинах номера COM у SoundBlaster/принтеров/мышей отличаются.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

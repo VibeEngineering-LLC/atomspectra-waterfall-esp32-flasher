@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
                                QLabel, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton,
@@ -156,8 +156,18 @@ class MainWindow(QMainWindow):
         self._active_project = prj
         self._worker = FlashWorker(prj, port, erase_first=erase)
         self._worker.log.connect(self._log)
+        self._worker.phase.connect(self._on_phase)
         self._worker.done.connect(self._on_done)
         self._worker.start()
+
+    def _on_phase(self, kind: str) -> None:
+        if kind == "erase":
+            self.progress.setRange(0, 0)
+            self.progress.setFormat("стирание…")
+        elif kind == "write":
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.progress.setFormat("прошивка…")
 
     def _on_done(self, ok: bool) -> None:
         self.btn_install.setEnabled(True)
@@ -183,3 +193,16 @@ class MainWindow(QMainWindow):
             self._log("=== Ошибка при прошивке. См. лог. ===")
             QMessageBox.critical(self, "Установка",
                                  "Ошибка при прошивке. См. лог.")
+
+    def closeEvent(self, e: QCloseEvent) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            r = QMessageBox.question(
+                self, "Выход",
+                "Прошивка ещё идёт.\n"
+                "Прервать сейчас — плата может остаться с битой прошивкой.\n"
+                "Всё равно выйти?")
+            if r != QMessageBox.Yes:
+                e.ignore()
+                return
+            self._worker.wait(5000)
+        super().closeEvent(e)
