@@ -1,41 +1,58 @@
-# atomspectra-waterfall-esp32 (Flasher)
+# ESP32 Flasher
 
-Автономный Windows-прошивальщик платы **AtomSpectra Waterfall (ESP32-S3)**.
-Один `.exe`, всё внутри — драйвер esptool, готовые `.bin`, минимальный UI.
+Простой прошивальщик для ESP32-устройств на базе Python/PySide6.
+Автоматически загружает актуальную прошивку с GitHub Releases.
 
-## Клиенту
+## Требования
 
-1. Скачать `atomspectra-waterfall-esp32.exe`.
-2. Вставить плату в USB.
-3. Запустить `.exe`.
-4. Выбрать проект (пока один: *AtomSpectra Waterfall (ESP32-S3)*), проверить,
-   что автоматически подставился нужный COM-порт (иначе — «Обновить»).
-5. Нажать **Установить**. Ждать «Готово».
+- Windows 10/11 x64
+- Интернет-соединение (прошивка тянется с GitHub при каждом запуске)
+- USB-драйвер платы (CH340 / CP2102 / FTDI)
 
-## Сборка
+## Использование
+
+1. Запустить `atomspectra-waterfall-esp32.exe`
+2. Выбрать проект из выпадающего списка
+3. Выбрать COM-порт платы
+4. Нажать «Установить»
+
+Flasher автоматически загрузит последнюю версию прошивки с GitHub и прошьёт плату.
+
+## Поддерживаемые устройства
+
+| Проект | Репо прошивки |
+|--------|--------------|
+| AtomSpectra (водопад ESP32-S3) | VibeEngineering-LLC/atomspectra-waterfall-esp32 |
+| AtomFast BLE Gateway (ESP32) | VibeEngineering-LLC/atomfast-esp32 |
+| Radex BLE Gateway (ESP32-S3) | VibeEngineering-LLC/radex-esp32 |
+| RadonEye BLE Gateway (ESP32) | VibeEngineering-LLC/radoneye-esp32 |
+
+## Обновление прошивки
+
+Flasher при каждом запуске запрашивает `latest release` с GitHub API и кэширует файлы
+в `%LOCALAPPDATA%\atomspectra-flasher\cache\<repo>\<tag>\`.
+Для принудительного обновления нажать «Обновить прошивку» в UI.
+
+При отсутствии интернета или превышении rate limit GitHub API — flasher показывает
+fatal-сообщение. Offline-режим не поддерживается.
+
+## Сборка из исходников
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python scripts/make_icon.py       # если ассетов ещё нет
+python -m flasher                 # запуск без сборки .exe
+```
+
+Сборка `.exe`:
+
+```powershell
 python -m PyInstaller --noconfirm --clean atomspectra-waterfall-esp32.spec
 # → dist/atomspectra-waterfall-esp32.exe
 ```
 
-## Смена/обновление firmware
+## Лицензия
 
-Положи новые файлы в `firmware/atomspectra-waterfall-esp32/`:
-
-- `bootloader.bin`
-- `partition-table.bin`
-- `atomspectra_gw.bin`
-- `flasher_args.json` (offsets/flash-settings; берётся из `build/` ESP-IDF)
-
-Пересобрать `.exe` тем же PyInstaller-командой.
-
-## Добавление других проектов
-
-Пока только AtomSpectra. Radex / AtomFast / RadonEye — в будущем: положить их
-`firmware/<key>/` + расширить `all_projects()` в
-`flasher/projects.py`.
+MIT
