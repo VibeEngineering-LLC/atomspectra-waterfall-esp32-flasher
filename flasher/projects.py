@@ -1,9 +1,6 @@
-"""Реестр проектов прошивки. Пока только atomspectra-waterfall-esp32."""
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import json
-import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -27,44 +24,82 @@ class Project:
     segments: tuple[FlashSegment, ...]
     next_steps: str = ""
 
+    # Новые поля
+    github_repo: str = ""
+    factory_asset_name: str = "firmware.factory.bin"
+    segments_from_factory: bool = False
 
-def _bundle_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "firmware"
-    return Path(__file__).resolve().parent.parent / "firmware"
-
-
-ATOMSPECTRA_NEXT_STEPS = (
-    "Дальше:\n"
-    "1. Отключи плату от USB и снова подключи (или нажми RESET).\n"
-    "2. На телефоне/ноутбуке найди WiFi-сеть «AtomSpectra-Setup» и подключись\n"
-    "   (пароль не нужен).\n"
-    "3. Откроется страница настройки. Если нет — открой в браузере\n"
-    "   http://192.168.4.1/\n"
-    "4. Выбери свою домашнюю WiFi 2.4 ГГц, введи пароль, нажми «Сохранить».\n"
-    "5. Плата подключится к твоей сети. Открой в браузере:\n"
-    "     http://atomspectra.local/\n"
-    "   Если не открывается — посмотри IP платы в настройках роутера\n"
-    "   (устройство «atomspectra») и открой http://<IP>/."
-)
+    def resolve(self, bin_path: Path) -> tuple[FlashSegment, ...]:
+        if self.segments_from_factory:
+            return (FlashSegment(0x0, bin_path),)
+        else:
+            return self.segments
 
 
-def _load_from_flasher_args(key: str, title: str, next_steps: str = "") -> Project:
-    root = _bundle_root() / key
-    data = json.loads((root / "flasher_args.json").read_text(encoding="utf-8"))
-    files = data["flash_files"]
-    segs = tuple(FlashSegment(int(off, 16), root / Path(rel).name)
-                 for off, rel in sorted(files.items(), key=lambda kv: int(kv[0], 16)))
-    extra = data["extra_esptool_args"]
-    fs = data["flash_settings"]
-    return Project(key=key, title=title, chip=extra["chip"],
-                   flash_mode=fs["flash_mode"], flash_freq=fs["flash_freq"],
-                   flash_size=fs["flash_size"], before=extra["before"],
-                   after=extra["after"], stub=bool(extra.get("stub", True)),
-                   segments=segs, next_steps=next_steps)
+# Реестр проектов
+PROJECT_REGISTRY = {
+    "atomspectra-waterfall-esp32": Project(
+        key="atomspectra-waterfall-esp32",
+        title="AtomSpectra (водопад ESP32-S3)",
+        chip="esp32s3",
+        flash_mode="dio",
+        flash_freq="80m",
+        flash_size="detect",
+        before="default_reset",
+        after="hard_reset",
+        stub=True,
+        segments=(),  # Будет заменён в resolve
+        github_repo="VibeEngineering-LLC/atomspectra-waterfall-esp32",
+        factory_asset_name="firmware.factory.bin",
+        segments_from_factory=True,
+    ),
+    "atomfast-gateway": Project(
+        key="atomfast-gateway",
+        title="AtomFast BLE Gateway (ESP32)",
+        chip="esp32",
+        flash_mode="dio",
+        flash_freq="40m",
+        flash_size="detect",
+        before="default_reset",
+        after="hard_reset",
+        stub=True,
+        segments=(),  # Будет заменён в resolve
+        github_repo="VibeEngineering-LLC/atomfast-esp32",
+        factory_asset_name="firmware.factory.bin",
+        segments_from_factory=True,
+    ),
+    "radex-gateway": Project(
+        key="radex-gateway",
+        title="Radex BLE Gateway (ESP32-S3)",
+        chip="esp32s3",
+        flash_mode="dio",
+        flash_freq="80m",
+        flash_size="detect",
+        before="default_reset",
+        after="hard_reset",
+        stub=True,
+        segments=(),  # Будет заменён в resolve
+        github_repo="VibeEngineering-LLC/radex-esp32",
+        factory_asset_name="firmware.factory.bin",
+        segments_from_factory=True,
+    ),
+    "radon-gateway": Project(
+        key="radon-gateway",
+        title="RadonEye BLE Gateway (ESP32)",
+        chip="esp32",
+        flash_mode="dio",
+        flash_freq="40m",
+        flash_size="detect",
+        before="default_reset",
+        after="hard_reset",
+        stub=True,
+        segments=(),  # Будет заменён в resolve
+        github_repo="VibeEngineering-LLC/radoneye-esp32",
+        factory_asset_name="firmware.factory.bin",
+        segments_from_factory=True,
+    ),
+}
 
 
 def all_projects() -> list[Project]:
-    return [_load_from_flasher_args("atomspectra-waterfall-esp32",
-                                     "AtomSpectra Waterfall (ESP32-S3)",
-                                     ATOMSPECTRA_NEXT_STEPS)]
+    return list(PROJECT_REGISTRY.values())

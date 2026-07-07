@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
                                QLabel, QMainWindow, QMessageBox,
@@ -16,6 +16,25 @@ from . import __version__
 from .ports import list_candidates, pick_default
 from .projects import Project, all_projects
 from .worker import FlashWorker
+from .updater import (FirmwareRelease, NetworkError, ReleaseNotFoundError,
+                      fetch_latest_release, get_cached_or_download)
+
+
+class FetchWorker(QThread):
+    """Фоновый поток: GET latest release с GitHub API."""
+    done = Signal(str, object)   # (tag: str, release: FirmwareRelease)
+    error = Signal(str)
+
+    def __init__(self, owner_repo: str) -> None:
+        super().__init__()
+        self._owner_repo = owner_repo
+
+    def run(self) -> None:
+        try:
+            release = fetch_latest_release(self._owner_repo)
+            self.done.emit(release.tag, release)
+        except (NetworkError, ReleaseNotFoundError) as e:
+            self.error.emit(str(e))
 
 
 class MainWindow(QMainWindow):
@@ -26,16 +45,20 @@ class MainWindow(QMainWindow):
         self._worker: FlashWorker | None = None
         self._active_project: Project | None = None
         self._projects: list[Project] = all_projects()
+        self._release: FirmwareRelease | None = None
+        self._fetch_worker: FetchWorker | None = None
         cw = QWidget()
         self.setCentralWidget(cw)
         root = QVBoxLayout(cw)
         self._build_row_project(root)
+        self._build_row_firmware(root)
         self._build_row_port(root)
         self._build_row_erase(root)
         self._build_row_install(root)
         self._build_row_progress(root)
         self._build_log(root)
         self._refresh_ports()
+        self._on_project_changed(0)
 
     def _build_row_project(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
@@ -43,8 +66,13 @@ class MainWindow(QMainWindow):
         self.cbo_project = QComboBox()
         for p in self._projects:
             self.cbo_project.addItem(p.title, p)
+        self.cbo_project.currentIndexChanged.connect(self._on_project_changed)
         row.addWidget(self.cbo_project, 1)
         root.addLayout(row)
+
+    def _build_row_firmware(self, root: QVBoxLayout) -> None:
+        self.lbl_firmware = QLabel("Прошивка: -")
+        root.addWidget(self.lbl_firmware)
 
     def _build_row_port(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
@@ -122,10 +150,43 @@ class MainWindow(QMainWindow):
                     break
         self._log(f"[ports] показано: {shown} (всего {len(items)})")
 
+    def _on_project_changed(self, _index: int = 0) -> None:
+        prj: Project | None = self.cbo_project.currentData()
+        if prj is None:
+            return
+        self._release = None
+        self.btn_install.setEnabled(True)
+        if not prj.github_repo:
+            self.lbl_firmware.setText("Прошивка: -")
+            return
+        self.lbl_firmware.setText("Прошивка: загрузка...")
+        if self._fetch_worker is not None and self._fetch_worker.isRunning():
+            self._fetch_worker.quit()
+            self._fetch_worker.wait(1000)
+        self._fetch_worker = FetchWorker(prj.github_repo)
+        self._fetch_worker.done.connect(self._on_fetch_done)
+        self._fetch_worker.error.connect(self._on_fetch_error)
+        self._fetch_worker.start()
+
+    def _on_fetch_done(self, tag: str, release: object) -> None:
+        self._release = release  # type: ignore[assignment]
+        self.lbl_firmware.setText(f"Прошивка: {tag} (загружено)")
+        self.btn_install.setEnabled(True)
+
+    def _on_fetch_error(self, msg: str) -> None:
+        self._release = None
+        self.lbl_firmware.setText("Прошивка: нет соединения")
+        self._log(f"[fetch] ошибка: {msg}")
+        QMessageBox.critical(
+            self, "Нет соединения",
+            "Нет соединения с GitHub. Проверьте интернет-подключение.\n"
+            "Прошивка недоступна без сети.")
+        self.btn_install.setEnabled(False)
+
     def _on_install(self) -> None:
         self.btn_install.setEnabled(False)
         pi = self.cbo_port.currentData()
-        prj = self.cbo_project.currentData()
+        prj: Project | None = self.cbo_project.currentData()
         if pi is None or prj is None:
             self.btn_install.setEnabled(True)
             QMessageBox.warning(self, "Установка", "Выбери проект и COM-порт.")
@@ -142,9 +203,24 @@ class MainWindow(QMainWindow):
             if r != QMessageBox.Yes:
                 self.btn_install.setEnabled(True)
                 return
-        self._start_flash(prj, pi.device)
+        if self._release is None:
+            self.btn_install.setEnabled(True)
+            QMessageBox.critical(self, "Установка",
+                                 "Прошивка не загружена. Проверьте соединение.")
+            return
+        asset = next(
+            (a for a in self._release.assets if a.name == prj.factory_asset_name),
+            None,
+        )
+        if asset is None:
+            self.btn_install.setEnabled(True)
+            QMessageBox.critical(
+                self, "Установка",
+                f"Asset '{prj.factory_asset_name}' не найден в релизе {self._release.tag}.")
+            return
+        self._start_flash(prj, pi.device, asset)
 
-    def _start_flash(self, prj: Project, port: str) -> None:
+    def _start_flash(self, prj: Project, port: str, asset: object) -> None:
         self.cbo_project.setEnabled(False)
         self.cbo_port.setEnabled(False)
         self.chk_erase.setEnabled(False)
@@ -153,12 +229,41 @@ class MainWindow(QMainWindow):
         erase = self.chk_erase.isChecked()
         mode = "полный сброс + прошивка" if erase else "прошивка"
         self._log(f"=== {mode.capitalize()} «{prj.title}» на {port} ===")
+        import dataclasses as _dc
+        self.progress.setFormat("загрузка прошивки...")
+        tag = self._release.tag if self._release else "?"
+        self._log(f"=== Загрузка {prj.factory_asset_name} ({tag}) ===")
+        try:
+            bin_path = get_cached_or_download(
+                prj.github_repo,
+                tag,
+                asset,  # type: ignore[arg-type]
+                progress_cb=self._on_download_progress,
+            )
+        except Exception as e:
+            self._log(f"[download] ошибка: {e}")
+            self.progress.setFormat("ошибка загрузки")
+            self.btn_install.setEnabled(True)
+            self.cbo_project.setEnabled(True)
+            self.cbo_port.setEnabled(True)
+            self.chk_erase.setEnabled(True)
+            QMessageBox.critical(self, "Загрузка", f"Не удалось загрузить прошивку:\n{e}")
+            return
+        prj = _dc.replace(prj, segments=prj.resolve(bin_path))
+        self.progress.setValue(0)
+        self.progress.setFormat("прошивка...")
         self._active_project = prj
         self._worker = FlashWorker(prj, port, erase_first=erase)
         self._worker.log.connect(self._log)
         self._worker.phase.connect(self._on_phase)
         self._worker.done.connect(self._on_done)
         self._worker.start()
+
+    def _on_download_progress(self, done: int, total: int) -> None:
+        if total > 0:
+            pct = int(done * 100 / total)
+            self.progress.setValue(pct)
+            self.progress.setFormat(f"загрузка {pct}%")
 
     def _on_phase(self, kind: str) -> None:
         if kind == "erase":
@@ -205,4 +310,7 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
             self._worker.wait(5000)
+        if self._fetch_worker is not None and self._fetch_worker.isRunning():
+            self._fetch_worker.quit()
+            self._fetch_worker.wait(2000)
         super().closeEvent(e)
