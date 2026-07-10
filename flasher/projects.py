@@ -98,6 +98,13 @@ PROJECT_REGISTRY = {
         factory_asset_name="firmware.factory.bin",
         segments_from_factory=True,
     ),
+    "bdkg05-gateway": Project(
+        key="bdkg05-gateway", title="ATOMTEX БДКГ-05 USB Gateway (ESP32-S3)",
+        chip="esp32s3", flash_mode="dio", flash_freq="80m", flash_size="detect",
+        before="default_reset", after="hard_reset", stub=True, segments=(),
+        github_repo="VibeEngineering-LLC/atomtex-esp32",
+        factory_asset_name="firmware.factory.bin", segments_from_factory=True,
+    ),
 }
 
 
