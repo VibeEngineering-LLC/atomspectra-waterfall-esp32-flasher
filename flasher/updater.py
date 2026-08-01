@@ -11,7 +11,7 @@ from typing import NamedTuple, Callable
 import requests
 
 CACHE_BASE = Path(os.environ.get("LOCALAPPDATA", "~/.cache")) / "atomspectra-flasher" / "cache"
-GITHUB_API = "https://api.github.com/repos/{owner_repo}/releases/latest"
+GITHUB_API_LIST = "https://api.github.com/repos/{owner_repo}/releases?per_page=30"
 TIMEOUT = 30
 
 
@@ -45,24 +45,9 @@ def _parse_sha_from_body(body: str, filename: str) -> str | None:
     return None
 
 
-def fetch_latest_release(owner_repo: str) -> FirmwareRelease:
-    url = GITHUB_API.format(owner_repo=owner_repo)
-    try:
-        response = requests.get(url, timeout=TIMEOUT)
-    except requests.RequestException as e:
-        raise NetworkError(f"Network error while fetching release: {e}")
-
-    if response.status_code == 404:
-        raise ReleaseNotFoundError(f"Release not found for {owner_repo}")
-    elif response.status_code == 403:
-        raise NetworkError("Rate limit exceeded or access forbidden")
-    elif not response.ok:
-        raise NetworkError(f"HTTP error: {response.status_code} - {response.reason}")
-
-    data = response.json()
+def _parse_release(data: dict) -> FirmwareRelease:
     tag = data["tag_name"]
     body = data.get("body", "")
-
     assets = []
     for asset in data.get("assets", []):
         name = asset["name"]
@@ -70,8 +55,44 @@ def fetch_latest_release(owner_repo: str) -> FirmwareRelease:
         size = asset["size"]
         sha256 = _parse_sha_from_body(body, name)
         assets.append(FirmwareAsset(name, url, size, sha256))
-
     return FirmwareRelease(tag, tuple(assets), body)
+
+
+def fetch_releases(owner_repo: str, asset_name: str) -> list[FirmwareRelease]:
+    """Релизы репозитория, в которых есть asset с именем asset_name.
+
+    Порядок — как отдаёт GitHub API (новые первыми). Берутся только
+    последние 30 релизов (одна страница API, без пагинации). Драфты API
+    не отдаёт без аутентификации; prerelease не отфильтровываем —
+    прошивальщик показывает всё, что реально можно прошить.
+    """
+    url = GITHUB_API_LIST.format(owner_repo=owner_repo)
+    try:
+        response = requests.get(url, timeout=TIMEOUT)
+    except requests.RequestException as e:
+        raise NetworkError(f"Network error while fetching releases: {e}")
+
+    if response.status_code == 404:
+        raise ReleaseNotFoundError(f"Releases not found for {owner_repo}")
+    elif response.status_code == 403:
+        raise NetworkError("Rate limit exceeded or access forbidden")
+    elif not response.ok:
+        raise NetworkError(f"HTTP error: {response.status_code} - {response.reason}")
+
+    releases = []
+    try:
+        for data in response.json():
+            release = _parse_release(data)
+            if any(a.name == asset_name for a in release.assets):
+                releases.append(release)
+    except (ValueError, KeyError, TypeError) as e:
+        # ValueError покрывает JSONDecodeError (его подкласс)
+        raise NetworkError(f"Invalid release data from GitHub API: {e}")
+
+    if not releases:
+        raise ReleaseNotFoundError(
+            f"No releases with asset '{asset_name}' in {owner_repo}")
+    return releases
 
 
 def get_cached_or_download(
