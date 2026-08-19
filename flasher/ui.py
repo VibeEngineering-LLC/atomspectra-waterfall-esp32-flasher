@@ -401,6 +401,8 @@ class MainWindow(QMainWindow):
                                  "Ошибка при прошивке. См. лог.")
 
     def closeEvent(self, e: QCloseEvent) -> None:
+        if self._reboot_worker is not None and self._reboot_worker.isRunning():
+            self._reboot_worker.wait(5000)
         if self._worker is not None and self._worker.isRunning():
             r = QMessageBox.question(
                 self, "Выход",
