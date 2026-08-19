@@ -17,22 +17,23 @@ from .ports import list_candidates, pick_default
 from .projects import Project, all_projects
 from .worker import FlashWorker, RebootWorker
 from .updater import (FirmwareRelease, NetworkError, ReleaseNotFoundError,
-                      fetch_latest_release, get_cached_or_download)
+                      fetch_releases, get_cached_or_download)
 
 
 class FetchWorker(QThread):
-    """Фоновый поток: GET latest release с GitHub API."""
-    done = Signal(str, object)   # (tag: str, release: FirmwareRelease)
+    """Фоновый поток: GET списка релизов с GitHub API."""
+    done = Signal(object)   # list[FirmwareRelease], новые первыми
     error = Signal(str)
 
-    def __init__(self, owner_repo: str) -> None:
+    def __init__(self, owner_repo: str, asset_name: str) -> None:
         super().__init__()
         self._owner_repo = owner_repo
+        self._asset_name = asset_name
 
     def run(self) -> None:
         try:
-            release = fetch_latest_release(self._owner_repo)
-            self.done.emit(release.tag, release)
+            releases = fetch_releases(self._owner_repo, self._asset_name)
+            self.done.emit(releases)
         except (NetworkError, ReleaseNotFoundError) as e:
             self.error.emit(str(e))
 
@@ -73,8 +74,15 @@ class MainWindow(QMainWindow):
         root.addLayout(row)
 
     def _build_row_firmware(self, root: QVBoxLayout) -> None:
-        self.lbl_firmware = QLabel("Прошивка: -")
-        root.addWidget(self.lbl_firmware)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Версия:"))
+        self.cbo_version = QComboBox()
+        self.cbo_version.setEnabled(False)
+        self.cbo_version.currentIndexChanged.connect(self._on_version_changed)
+        row.addWidget(self.cbo_version, 1)
+        self.lbl_firmware = QLabel("загрузка...")
+        row.addWidget(self.lbl_firmware)
+        root.addLayout(row)
 
     def _build_row_port(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
@@ -182,30 +190,56 @@ class MainWindow(QMainWindow):
         if prj is None:
             return
         self._release = None
+        self.cbo_version.blockSignals(True)
+        self.cbo_version.clear()
+        self.cbo_version.blockSignals(False)
+        self.cbo_version.setEnabled(False)
         self.btn_install.setEnabled(True)
         self.row_reboot.setVisible(bool(prj.pre_flash_http_reboot))
         if prj.pre_flash_http_reboot:
             self.chk_net_reboot.setChecked(bool(self.txt_ip.text().strip()))
         if not prj.github_repo:
-            self.lbl_firmware.setText("Прошивка: -")
+            self.lbl_firmware.setText("-")
             return
-        self.lbl_firmware.setText("Прошивка: загрузка...")
-        if self._fetch_worker is not None and self._fetch_worker.isRunning():
-            self._fetch_worker.quit()
-            self._fetch_worker.wait(1000)
-        self._fetch_worker = FetchWorker(prj.github_repo)
+        self.lbl_firmware.setText("загрузка...")
+        if self._fetch_worker is not None:
+            # Отцепляем сигналы: если wait не дождётся, отставший done/error
+            # старого воркера не должен перезаписать результаты нового проекта
+            self._fetch_worker.done.disconnect()
+            self._fetch_worker.error.disconnect()
+            if self._fetch_worker.isRunning():
+                self._fetch_worker.quit()
+                self._fetch_worker.wait(1000)
+        self._fetch_worker = FetchWorker(prj.github_repo, prj.factory_asset_name)
         self._fetch_worker.done.connect(self._on_fetch_done)
         self._fetch_worker.error.connect(self._on_fetch_error)
         self._fetch_worker.start()
 
-    def _on_fetch_done(self, tag: str, release: object) -> None:
-        self._release = release  # type: ignore[assignment]
-        self.lbl_firmware.setText(f"Прошивка: {tag} (загружено)")
+    def _on_fetch_done(self, releases: object) -> None:
+        releases_list: list[FirmwareRelease] = releases  # type: ignore[assignment]
+        if not releases_list:
+            self._on_fetch_error("пустой список релизов")
+            return
+        self.cbo_version.blockSignals(True)
+        self.cbo_version.clear()
+        for i, rel in enumerate(releases_list):
+            label = rel.tag + (" (последняя)" if i == 0 else "")
+            self.cbo_version.addItem(label, rel)
+        self.cbo_version.setCurrentIndex(0)
+        self.cbo_version.blockSignals(False)
+        self.cbo_version.setEnabled(True)
+        self._release = releases_list[0]
+        self.lbl_firmware.setText(f"релизов: {len(releases_list)}")
         self.btn_install.setEnabled(True)
+
+    def _on_version_changed(self, _index: int = 0) -> None:
+        rel = self.cbo_version.currentData()
+        if rel is not None:
+            self._release = rel
 
     def _on_fetch_error(self, msg: str) -> None:
         self._release = None
-        self.lbl_firmware.setText("Прошивка: нет соединения")
+        self.lbl_firmware.setText("нет соединения")
         self._log(f"[fetch] ошибка: {msg}")
         QMessageBox.critical(
             self, "Нет соединения",
@@ -252,6 +286,7 @@ class MainWindow(QMainWindow):
 
     def _start_flash(self, prj: Project, port: str, asset: object) -> None:
         self.cbo_project.setEnabled(False)
+        self.cbo_version.setEnabled(False)
         self.cbo_port.setEnabled(False)
         self.chk_erase.setEnabled(False)
         self.row_reboot.setEnabled(False)
@@ -276,6 +311,7 @@ class MainWindow(QMainWindow):
             self.progress.setFormat("ошибка загрузки")
             self.btn_install.setEnabled(True)
             self.cbo_project.setEnabled(True)
+            self.cbo_version.setEnabled(True)
             self.cbo_port.setEnabled(True)
             self.chk_erase.setEnabled(True)
             self.row_reboot.setEnabled(True)
@@ -340,6 +376,7 @@ class MainWindow(QMainWindow):
     def _on_done(self, ok: bool) -> None:
         self.btn_install.setEnabled(True)
         self.cbo_project.setEnabled(True)
+        self.cbo_version.setEnabled(True)
         self.cbo_port.setEnabled(True)
         self.chk_erase.setEnabled(True)
         self.row_reboot.setEnabled(True)
@@ -374,7 +411,10 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
             self._worker.wait(5000)
-        if self._fetch_worker is not None and self._fetch_worker.isRunning():
-            self._fetch_worker.quit()
-            self._fetch_worker.wait(2000)
+        if self._fetch_worker is not None:
+            self._fetch_worker.done.disconnect()
+            self._fetch_worker.error.disconnect()
+            if self._fetch_worker.isRunning():
+                self._fetch_worker.quit()
+                self._fetch_worker.wait(2000)
         super().closeEvent(e)
