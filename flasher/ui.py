@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QSettings, QThread, Signal
 from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
-                               QLabel, QMainWindow, QMessageBox,
+                               QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton,
                                QVBoxLayout, QWidget)
 
@@ -15,7 +15,7 @@ _PROGRESS_RE = re.compile(r"\((\d{1,3})\s*%\)")
 from . import __version__
 from .ports import list_candidates, pick_default
 from .projects import Project, all_projects
-from .worker import FlashWorker
+from .worker import FlashWorker, RebootWorker
 from .updater import (FirmwareRelease, NetworkError, ReleaseNotFoundError,
                       fetch_latest_release, get_cached_or_download)
 
@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"AtomSpectra Waterfall Flasher {__version__}")
         self.resize(720, 460)
         self._worker: FlashWorker | None = None
+        self._reboot_worker: RebootWorker | None = None
         self._active_project: Project | None = None
         self._projects: list[Project] = all_projects()
         self._release: FirmwareRelease | None = None
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
         self._build_row_firmware(root)
         self._build_row_port(root)
         self._build_row_erase(root)
+        self._build_row_reboot(root)
         self._build_row_install(root)
         self._build_row_progress(root)
         self._build_log(root)
@@ -93,6 +95,31 @@ class MainWindow(QMainWindow):
         row.addWidget(self.chk_erase)
         row.addStretch(1)
         root.addLayout(row)
+
+    def _build_row_reboot(self, root: QVBoxLayout) -> None:
+        # Опциональный шаг для проектов с pre_flash_http_reboot=True
+        # (сейчас — только atomspectra-waterfall-esp32). Скрыт по умолчанию,
+        # показывается в _on_project_changed.
+        self.row_reboot = QWidget()
+        row = QHBoxLayout(self.row_reboot)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.chk_net_reboot = QCheckBox(
+            "Перезагрузить плату по сети перед прошивкой "
+            "(сохранить открытый сегмент)")
+        self.chk_net_reboot.setChecked(True)
+        row.addWidget(self.chk_net_reboot)
+        row.addWidget(QLabel("IP платы:"))
+        self.txt_ip = QLineEdit()
+        self.txt_ip.setPlaceholderText("192.168.x.x")
+        self.txt_ip.setMaximumWidth(140)
+        settings = QSettings("VibeEngineering-LLC", "esp32-flasher")
+        last_ip = settings.value("atomspectra/last_ip", "", type=str)
+        if last_ip:
+            self.txt_ip.setText(last_ip)
+        row.addWidget(self.txt_ip)
+        row.addStretch(1)
+        root.addWidget(self.row_reboot)
+        self.row_reboot.setVisible(False)
 
     def _build_row_install(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
@@ -156,6 +183,9 @@ class MainWindow(QMainWindow):
             return
         self._release = None
         self.btn_install.setEnabled(True)
+        self.row_reboot.setVisible(bool(prj.pre_flash_http_reboot))
+        if prj.pre_flash_http_reboot:
+            self.chk_net_reboot.setChecked(bool(self.txt_ip.text().strip()))
         if not prj.github_repo:
             self.lbl_firmware.setText("Прошивка: -")
             return
@@ -224,6 +254,7 @@ class MainWindow(QMainWindow):
         self.cbo_project.setEnabled(False)
         self.cbo_port.setEnabled(False)
         self.chk_erase.setEnabled(False)
+        self.row_reboot.setEnabled(False)
         self.progress.setValue(0)
         self.progress.setFormat("прошивка…")
         erase = self.chk_erase.isChecked()
@@ -247,17 +278,30 @@ class MainWindow(QMainWindow):
             self.cbo_project.setEnabled(True)
             self.cbo_port.setEnabled(True)
             self.chk_erase.setEnabled(True)
+            self.row_reboot.setEnabled(True)
             QMessageBox.critical(self, "Загрузка", f"Не удалось загрузить прошивку:\n{e}")
             return
         prj = _dc.replace(prj, segments=prj.resolve(bin_path))
-        self.progress.setValue(0)
-        self.progress.setFormat("прошивка...")
         self._active_project = prj
-        self._worker = FlashWorker(prj, port, erase_first=erase)
-        self._worker.log.connect(self._log)
-        self._worker.phase.connect(self._on_phase)
-        self._worker.done.connect(self._on_done)
-        self._worker.start()
+        self._maybe_network_reboot(prj, port, erase)
+
+    def _maybe_network_reboot(self, prj: Project, port: str, erase: bool) -> None:
+        ip = self.txt_ip.text().strip() if prj.pre_flash_http_reboot else ""
+        do_reboot = (prj.pre_flash_http_reboot
+                     and self.chk_net_reboot.isChecked() and bool(ip))
+        if not do_reboot:
+            self._launch_flash_worker(prj, port, erase)
+            return
+        settings = QSettings("VibeEngineering-LLC", "esp32-flasher")
+        settings.setValue("atomspectra/last_ip", ip)
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("сетевой ребут платы...")
+        self._log(f"=== Сетевой ребут платы {ip} перед прошивкой ===")
+        self._reboot_worker = RebootWorker(ip)
+        self._reboot_worker.log.connect(self._log)
+        self._reboot_worker.done.connect(
+            lambda ok, p=prj, prt=port, er=erase: self._on_reboot_done(ok, p, prt, er))
+        self._reboot_worker.start()
 
     def _on_download_progress(self, done: int, total: int) -> None:
         if total > 0:
@@ -274,11 +318,31 @@ class MainWindow(QMainWindow):
             self.progress.setValue(0)
             self.progress.setFormat("прошивка…")
 
+    def _on_reboot_done(self, ok: bool, prj: Project, port: str, erase: bool) -> None:
+        # Best-effort: независимо от ok (плата ответила или нет) прошивку
+        # продолжаем — при неудаче лог уже объяснил причину и что дальше
+        # будет аппаратный сброс.
+        if self._reboot_worker is not None:
+            self._reboot_worker.deleteLater()
+            self._reboot_worker = None
+        self.progress.setRange(0, 100)
+        self._launch_flash_worker(prj, port, erase)
+
+    def _launch_flash_worker(self, prj: Project, port: str, erase: bool) -> None:
+        self.progress.setValue(0)
+        self.progress.setFormat("прошивка...")
+        self._worker = FlashWorker(prj, port, erase_first=erase)
+        self._worker.log.connect(self._log)
+        self._worker.phase.connect(self._on_phase)
+        self._worker.done.connect(self._on_done)
+        self._worker.start()
+
     def _on_done(self, ok: bool) -> None:
         self.btn_install.setEnabled(True)
         self.cbo_project.setEnabled(True)
         self.cbo_port.setEnabled(True)
         self.chk_erase.setEnabled(True)
+        self.row_reboot.setEnabled(True)
         if self._worker is not None:
             self._worker.deleteLater()
             self._worker = None

@@ -29,6 +29,12 @@ class Project:
     factory_asset_name: str = "firmware.factory.bin"
     segments_from_factory: bool = False
 
+    # Опциональный шаг: грациозный ребут платы по сети (HTTP) ПЕРЕД
+    # аппаратным сбросом esptool — плата успевает дописать/закрыть открытый
+    # сегмент водопада. Есть только у прошивки atomspectra-waterfall-esp32
+    # (эндпоинты /api/csrf-token + /api/reboot-esp), у ESPHome-шлюзов нет.
+    pre_flash_http_reboot: bool = False
+
     def resolve(self, bin_path: Path) -> tuple[FlashSegment, ...]:
         if self.segments_from_factory:
             return (FlashSegment(0x0, bin_path),)
@@ -52,6 +58,7 @@ PROJECT_REGISTRY = {
         github_repo="VibeEngineering-LLC/atomspectra-waterfall-esp32",
         factory_asset_name="firmware.factory.bin",
         segments_from_factory=True,
+        pre_flash_http_reboot=True,
     ),
     "atomfast-gateway": Project(
         key="atomfast-gateway",
