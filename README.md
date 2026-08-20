@@ -47,9 +47,14 @@ Flasher прошивает только плату ESP32; на подключё�
 |--------|--------------|
 | AtomSpectra (водопад ESP32-S3) | VibeEngineering-LLC/atomspectra-waterfall-esp32 |
 | AtomFast BLE Gateway (ESP32) | VibeEngineering-LLC/atomfast-esp32 |
-| Radex BLE Gateway (ESP32-S3) | VibeEngineering-LLC/radex-esp32 |
+| Radex BLE Gateway (ESP32-S3 N16R8) | VibeEngineering-LLC/radex-esp32 |
 | RadonEye BLE Gateway (ESP32) | VibeEngineering-LLC/radoneye-esp32 |
 | ATOMTEX БДКГ-05 USB Gateway (ESP32-S3) | VibeEngineering-LLC/atomtex-esp32 |
+
+Прошивка Radex-шлюза настраивается уже после заливки и требует платы **N16R8**
+(16 МБ флеша, 8 МБ PSRAM): образ идёт без пароля Wi-Fi и без MAC прибора. Плата
+поднимает свою точку доступа, сеть выбирается с телефона, а прибор Radex находится
+в эфире сам. Порядок шагов программа печатает после успешной прошивки.
 
 ## Обновление прошивки
 
