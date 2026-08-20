@@ -75,9 +75,13 @@ PROJECT_REGISTRY = {
         factory_asset_name="firmware.factory.bin",
         segments_from_factory=True,
     ),
+    # Radex MR107ion (радон) через BLE. Прошивка ESPHome, плата
+    # ESP32-S3-DevKitC-1 N16R8 (16 MB флеша, 8 MB PSRAM) - та же, что у
+    # водопада AtomSpectra. MAC прибора в бинарник не зашит: плата ищет
+    # Radex в эфире сама, поэтому один общий образ годится всем.
     "radex-gateway": Project(
         key="radex-gateway",
-        title="Radex BLE Gateway (ESP32-S3)",
+        title="Radex BLE Gateway (ESP32-S3 N16R8)",
         chip="esp32s3",
         flash_mode="dio",
         flash_freq="80m",
@@ -89,6 +93,7 @@ PROJECT_REGISTRY = {
         github_repo="VibeEngineering-LLC/radex-esp32",
         factory_asset_name="firmware.factory.bin",
         segments_from_factory=True,
+        next_steps="Прошивка не знает ни вашей сети, ни адреса прибора - и то, и другое настраивается после заливки, пересобирать ничего не нужно.\n1. Плата поднимает свою точку доступа 'radex-gw-s3 Fallback' (пароль radexgw123). Подключитесь к ней с телефона или ноутбука.\n2. Откроется страница настройки (если нет - зайдите на http://192.168.4.1). Выберите домашнюю сеть Wi-Fi и введите пароль.\n3. Плата перезагрузится и войдёт в вашу сеть. Web UI - http://radex-gw-s3.local/ (логин и пароль по умолчанию: radex / radex).\n4. Включите Radex MR107ion рядом с платой. Прибор находится в эфире сам - следите за полем 'Найденный прибор Radex' в Web UI. Если приборов несколько, впишите нужный MAC вручную и нажмите 'Применить MAC и перезагрузить'.\nВыгрузка на Народмон выключена и включается только вручную.",
     ),
     "radon-gateway": Project(
         key="radon-gateway",
