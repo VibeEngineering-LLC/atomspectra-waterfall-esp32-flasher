@@ -1,5 +1,6 @@
 # PyInstaller spec — onefile Windows build.
-# Название .exe по имени git-репо: atomspectra-waterfall-esp32.exe
+# Название .exe по имени git-репо: atomspectra-waterfall-esp32-flasher.exe
+# (issue #2: имя совпадало с репо самой прошивки atomspectra-waterfall-esp32 — путало пользователя)
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
@@ -102,7 +103,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="atomspectra-waterfall-esp32",
+    name="atomspectra-waterfall-esp32-flasher",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
