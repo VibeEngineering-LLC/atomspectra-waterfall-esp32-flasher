@@ -1,8 +1,13 @@
 # PyInstaller spec — onefile Windows build.
-# Название .exe по имени git-репо: atomspectra-waterfall-esp32-flasher.exe
-# (issue #2: имя совпадало с репо самой прошивки atomspectra-waterfall-esp32 — путало пользователя)
+# Название .exe по конвенции проектов оператора (repo-version), см. VibeEngineering-LLC/
+# waterfall-viewer: atomspectra-waterfall-esp32-flasher-X.Y.Z.exe (платформа не дублируется
+# в имени — расширение .exe уже говорит, что это Windows-сборка; в waterfall-viewer суффикс
+# windows-x64 нужен внутри .zip, у нас .exe — сразу платформо-специфичный файл).
+# (issue #2: без версии имя совпадало с репо самой прошивки atomspectra-waterfall-esp32 —
+# путало пользователя; версия дописана, чтобы разные скачанные .exe не путались между собой)
 # -*- mode: python ; coding: utf-8 -*-
 
+import re
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
@@ -10,6 +15,15 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = Path(SPECPATH).resolve()
 FIRMWARE = ROOT / "firmware" / "atomspectra-waterfall-esp32"
 ICON = ROOT / "assets" / "icon.ico"
+
+# Версия читается из flasher/__init__.py напрямую (regex, не импорт) — spec-контекст
+# PyInstaller не обязан иметь установленным сам пакет flasher.
+_init_src = (ROOT / "flasher" / "__init__.py").read_text(encoding="utf-8")
+_m = re.search(r'__version__\s*=\s*"([^"]+)"', _init_src)
+if not _m:
+    raise RuntimeError("flasher/__init__.py: __version__ не найден")
+APP_VERSION = _m.group(1)
+EXE_NAME = f"atomspectra-waterfall-esp32-flasher-{APP_VERSION}"
 
 _datas = []
 for p in FIRMWARE.iterdir():
@@ -103,7 +117,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="atomspectra-waterfall-esp32-flasher",
+    name=EXE_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -11,7 +11,8 @@
 
 ## Использование
 
-1. Запустить `atomspectra-waterfall-esp32-flasher.exe`
+1. Запустить `atomspectra-waterfall-esp32-flasher-X.Y.Z.exe` (скачать с
+   [Releases](https://github.com/VibeEngineering-LLC/atomspectra-waterfall-esp32-flasher/releases/latest))
 2. Выбрать проект из выпадающего списка
 3. Выбрать версию прошивки (по умолчанию — последний релиз; можно откатиться на более раннюю)
 4. Выбрать COM-порт платы
@@ -79,7 +80,7 @@ python -m flasher                 # запуск без сборки .exe
 
 ```powershell
 python -m PyInstaller --noconfirm --clean atomspectra-waterfall-esp32-flasher.spec
-# → dist/atomspectra-waterfall-esp32-flasher.exe
+# → dist/atomspectra-waterfall-esp32-flasher-X.Y.Z.exe (версия — из flasher/__init__.py)
 ```
 
 ## Лицензия
