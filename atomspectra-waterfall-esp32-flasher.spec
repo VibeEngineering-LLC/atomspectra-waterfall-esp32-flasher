@@ -31,6 +31,8 @@ for p in FIRMWARE.iterdir():
         _datas.append((str(p), "firmware/atomspectra-waterfall-esp32"))
 
 _esp_datas, _esp_bin, _esp_hidden = collect_all("esptool")
+# #RADEX-186: генератор образа NVS (запись домашней сети в плату при прошивке).
+_nvs_datas, _nvs_bin, _nvs_hidden = collect_all("esp_idf_nvs_partition_gen")
 _qt_datas, _qt_bin, _qt_hidden = collect_all("PySide6")
 
 # Модули PySide6 не нужны Flasher-у: только QtCore/QtGui/QtWidgets.
@@ -83,9 +85,9 @@ _QT_HIDDEN_EXCLUDES = [f"PySide6.Qt{m}" for m in _QT_MODULE_EXCLUDES]
 a = Analysis(
     ["run_flasher.py"],
     pathex=[str(ROOT)],
-    binaries=_esp_bin + _qt_bin,
-    datas=_datas + _esp_datas + _qt_datas,
-    hiddenimports=_esp_hidden + _qt_hidden,
+    binaries=_esp_bin + _nvs_bin + _qt_bin,
+    datas=_datas + _esp_datas + _nvs_datas + _qt_datas,
+    hiddenimports=_esp_hidden + _nvs_hidden + _qt_hidden,
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "numpy", "pytest",

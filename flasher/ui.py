@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         self._build_row_port(root)
         self._build_row_erase(root)
         self._build_row_reboot(root)
+        self._build_row_wifi(root)
         self._build_row_install(root)
         self._build_row_progress(root)
         self._build_log(root)
@@ -129,6 +130,62 @@ class MainWindow(QMainWindow):
         root.addWidget(self.row_reboot)
         self.row_reboot.setVisible(False)
 
+    def _build_row_wifi(self, root: QVBoxLayout) -> None:
+        # Строка ввода Wi-Fi сети для записи в плату
+        self.row_wifi = QWidget()
+        row = QHBoxLayout(self.row_wifi)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.chk_wifi = QCheckBox("Записать домашнюю сеть в плату (без настройки с телефона)")
+        self.chk_wifi.setChecked(True)
+        row.addWidget(self.chk_wifi)
+        row.addWidget(QLabel("Сеть:"))
+        self.txt_wifi_ssid = QLineEdit()
+        self.txt_wifi_ssid.setPlaceholderText("имя сети Wi-Fi")
+        self.txt_wifi_ssid.setMaximumWidth(200)
+        settings = QSettings("VibeEngineering-LLC", "esp32-flasher")
+        last_ssid = settings.value("wifi/last_ssid", "", type=str)
+        if last_ssid:
+            self.txt_wifi_ssid.setText(last_ssid)
+        row.addWidget(self.txt_wifi_ssid)
+        row.addWidget(QLabel("Пароль:"))
+        self.txt_wifi_pass = QLineEdit()
+        self.txt_wifi_pass.setPlaceholderText("пароль")
+        self.txt_wifi_pass.setMaximumWidth(200)
+        self.txt_wifi_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        row.addWidget(self.txt_wifi_pass)
+        row.addStretch(1)
+        root.addWidget(self.row_wifi)
+        self.row_wifi.setVisible(False)
+
+    def _wifi_nvs_segment(self, prj: Project) -> Project:
+        # Добавляет в проект сегмент NVS с Wi-Fi сетью, если нужно
+        if prj.wifi_nvs_offset is None:
+            return prj
+        if not self.chk_wifi.isChecked():
+            return prj
+        ssid = self.txt_wifi_ssid.text().strip()
+        if not ssid:
+            return prj
+        password = self.txt_wifi_pass.text()
+        settings = QSettings("VibeEngineering-LLC", "esp32-flasher")
+        settings.setValue("wifi/last_ssid", ssid)
+        # Импорт вне try: иначе при неудачном импорте (пакета нет в сборке)
+        # имя WifiNvsError не определено и except падает с NameError.
+        try:
+            from .wifi_nvs import build_wifi_nvs, WifiNvsError
+        except Exception as e:
+            self._log(f"[wifi] генератор NVS недоступен, сеть не записываю: {e}")
+            return prj
+        try:
+            nvs_path = build_wifi_nvs(ssid, password)
+        except WifiNvsError as e:
+            self._log(f"[wifi] не записываю сеть: {e}")
+            return prj
+        self._log(f"[wifi] сеть '{ssid}' будет записана в плату")
+        import dataclasses as _dc
+        from .projects import FlashSegment
+        return _dc.replace(prj, segments=prj.segments + (FlashSegment(prj.wifi_nvs_offset, nvs_path),))
+
     def _build_row_install(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
         self.btn_install = QPushButton("Установить")
@@ -196,6 +253,7 @@ class MainWindow(QMainWindow):
         self.cbo_version.setEnabled(False)
         self.btn_install.setEnabled(True)
         self.row_reboot.setVisible(bool(prj.pre_flash_http_reboot))
+        self.row_wifi.setVisible(prj.wifi_nvs_offset is not None)
         if prj.pre_flash_http_reboot:
             self.chk_net_reboot.setChecked(bool(self.txt_ip.text().strip()))
         if not prj.github_repo:
@@ -318,6 +376,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Загрузка", f"Не удалось загрузить прошивку:\n{e}")
             return
         prj = _dc.replace(prj, segments=prj.resolve(bin_path))
+        prj = self._wifi_nvs_segment(prj)
         self._active_project = prj
         self._maybe_network_reboot(prj, port, erase)
 
