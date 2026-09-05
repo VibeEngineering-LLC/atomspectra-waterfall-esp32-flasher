@@ -102,6 +102,16 @@ class MainWindow(QMainWindow):
             "(стереть настройки WiFi, ~30-60с дольше)")
         self.chk_erase.setChecked(False)
         row.addWidget(self.chk_erase)
+        # #RADEX-186 шаг Б: обновление БЕЗ потери настроек. Полный образ идёт
+        # на 0x0 сплошняком и накрывает раздел nvs — плата после него просит
+        # заново выбрать сеть и прибор (W-065). Для проектов, у которых в
+        # релизе есть отдельный файл приложения, здесь появляется выбор.
+        self.chk_update = QCheckBox(
+            "Обновление: сохранить настройки "
+            "(шить только приложение, сеть и прибор останутся)")
+        self.chk_update.setChecked(False)
+        self.chk_update.setVisible(False)
+        row.addWidget(self.chk_update)
         row.addStretch(1)
         root.addLayout(row)
 
@@ -160,6 +170,12 @@ class MainWindow(QMainWindow):
     def _wifi_nvs_segment(self, prj: Project) -> Project:
         # Добавляет в проект сегмент NVS с Wi-Fi сетью, если нужно
         if prj.wifi_nvs_offset is None:
+            return prj
+        # #RADEX-186 шаг Б: в режиме обновления раздел nvs не трогаем вовсе —
+        # записать туда сеть значило бы стереть остальные настройки платы
+        # (привязку прибора, параметры критерия), ради сохранения которых режим
+        # и существует.
+        if getattr(self, '_update_mode', False):
             return prj
         if not self.chk_wifi.isChecked():
             return prj
@@ -254,6 +270,11 @@ class MainWindow(QMainWindow):
         self.btn_install.setEnabled(True)
         self.row_reboot.setVisible(bool(prj.pre_flash_http_reboot))
         self.row_wifi.setVisible(prj.wifi_nvs_offset is not None)
+        # #RADEX-186 шаг Б: режим обновления есть только у проектов с отдельным
+        # файлом приложения в релизе; у ESPHome-прошивок его нет.
+        self.chk_update.setVisible(prj.supports_update)
+        if not prj.supports_update:
+            self.chk_update.setChecked(False)
         if prj.pre_flash_http_reboot:
             self.chk_net_reboot.setChecked(bool(self.txt_ip.text().strip()))
         if not prj.github_repo:
@@ -330,16 +351,23 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Установка",
                                  "Прошивка не загружена. Проверьте соединение.")
             return
+        # #RADEX-186 шаг Б: что шьём — полный образ или только приложение.
+        # Взаимоисключающе с «Полным сбросом»: тот стирает флеш целиком, и
+        # сохранять настройки после него нечего.
+        want_update = (prj.supports_update and self.chk_update.isChecked()
+                       and not self.chk_erase.isChecked())
+        wanted_name = prj.app_asset_name if want_update else prj.factory_asset_name
         asset = next(
-            (a for a in self._release.assets if a.name == prj.factory_asset_name),
+            (a for a in self._release.assets if a.name == wanted_name),
             None,
         )
         if asset is None:
             self.btn_install.setEnabled(True)
             QMessageBox.critical(
                 self, "Установка",
-                f"Asset '{prj.factory_asset_name}' не найден в релизе {self._release.tag}.")
+                f"Asset '{wanted_name}' не найден в релизе {self._release.tag}.")
             return
+        self._update_mode = want_update
         self._start_flash(prj, pi.device, asset)
 
     def _start_flash(self, prj: Project, port: str, asset: object) -> None:
@@ -347,6 +375,7 @@ class MainWindow(QMainWindow):
         self.cbo_version.setEnabled(False)
         self.cbo_port.setEnabled(False)
         self.chk_erase.setEnabled(False)
+        self.chk_update.setEnabled(False)
         self.row_reboot.setEnabled(False)
         self.progress.setValue(0)
         self.progress.setFormat("прошивка…")
@@ -356,7 +385,7 @@ class MainWindow(QMainWindow):
         import dataclasses as _dc
         self.progress.setFormat("загрузка прошивки...")
         tag = self._release.tag if self._release else "?"
-        self._log(f"=== Загрузка {prj.factory_asset_name} ({tag}) ===")
+        self._log(f"=== Загрузка {getattr(asset, 'name', prj.factory_asset_name)} ({tag}) ===")
         try:
             bin_path = get_cached_or_download(
                 prj.github_repo,
@@ -372,10 +401,16 @@ class MainWindow(QMainWindow):
             self.cbo_version.setEnabled(True)
             self.cbo_port.setEnabled(True)
             self.chk_erase.setEnabled(True)
+            self.chk_update.setEnabled(True)
             self.row_reboot.setEnabled(True)
             QMessageBox.critical(self, "Загрузка", f"Не удалось загрузить прошивку:\n{e}")
             return
-        prj = _dc.replace(prj, segments=prj.resolve(bin_path))
+        # #RADEX-186 шаг Б: в режиме обновления сегмент один — приложение на
+        # своём смещении; разделы данных (nvs, storage) заливка не трогает.
+        if getattr(self, "_update_mode", False):
+            prj = _dc.replace(prj, segments=prj.resolve_app(bin_path))
+        else:
+            prj = _dc.replace(prj, segments=prj.resolve(bin_path))
         prj = self._wifi_nvs_segment(prj)
         self._active_project = prj
         self._maybe_network_reboot(prj, port, erase)
