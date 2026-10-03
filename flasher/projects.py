@@ -98,6 +98,24 @@ PROJECT_REGISTRY = {
         factory_asset_name="firmware.factory.bin",
         segments_from_factory=True,
     ),
+    # AtomFast на ESP32-S3-DevKitC-1 N16R8 (ESP-IDF). Тот же репо, что и классическая
+    # ESP32, поэтому образ лежит под своим именем ассета: список релизов каждого
+    # проекта фильтруется по имени, и релиз S3 не попадает в список классической.
+    "atomfast-gateway-s3": Project(
+        key="atomfast-gateway-s3",
+        title="AtomFast BLE Gateway (ESP32-S3 N16R8)",
+        chip="esp32s3",
+        flash_mode="dio",
+        flash_freq="80m",
+        flash_size="detect",
+        before="default_reset",
+        after="hard_reset",
+        stub=True,
+        segments=(),  # Будет заменён в resolve
+        github_repo="VibeEngineering-LLC/atomfast-esp32",
+        factory_asset_name="atomfast-gw-s3.factory.bin",
+        segments_from_factory=True,
+    ),
     # Radex MR107ion (радон) через BLE или USB-кабель. Прошивка ESP-IDF
     # (radex-esp32 v1.13+), плата ESP32-S3-DevKitC-1 N16R8 (16 MB флеша,
     # 8 MB PSRAM) - та же, что у водопада AtomSpectra. Канал выбирается
