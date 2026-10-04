@@ -128,6 +128,16 @@ def get_cached_or_download(
     return bin_path
 
 
+def fetch_text_asset(asset: FirmwareAsset) -> str:
+    """Небольшой текстовый ассет релиза (например, ключ Wi-Fi) — без кэша."""
+    try:
+        r = requests.get(asset.url, timeout=TIMEOUT)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        raise NetworkError(f"не удалось скачать {asset.name}: {e}")
+    return r.content.decode("utf-8-sig")
+
+
 def _download(url: str, dest: Path, size: int, progress_cb: Callable[[int, int], None] | None) -> None:
     chunk_size = 65536
     downloaded = 0

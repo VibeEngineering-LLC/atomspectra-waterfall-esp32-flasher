@@ -14,10 +14,12 @@ _PROGRESS_RE = re.compile(r"\((\d{1,3})\s*%\)")
 
 from . import __version__
 from .ports import list_candidates, pick_default
+from .esphome_nvs_ui import EsphomeNvsMixin
 from .projects import Project, all_projects
 from .worker import FlashWorker, RebootWorker
 from .updater import (FirmwareRelease, NetworkError, ReleaseNotFoundError,
-                      fetch_releases, get_cached_or_download)
+                      fetch_releases, fetch_text_asset,
+                      get_cached_or_download)
 
 
 class FetchWorker(QThread):
@@ -38,7 +40,7 @@ class FetchWorker(QThread):
             self.error.emit(str(e))
 
 
-class MainWindow(QMainWindow):
+class MainWindow(EsphomeNvsMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"AtomSpectra Waterfall Flasher {__version__}")
@@ -58,6 +60,7 @@ class MainWindow(QMainWindow):
         self._build_row_erase(root)
         self._build_row_reboot(root)
         self._build_row_wifi(root)
+        self._build_row_mac(root)
         self._build_row_install(root)
         self._build_row_progress(root)
         self._build_log(root)
@@ -166,10 +169,33 @@ class MainWindow(QMainWindow):
         row.addStretch(1)
         root.addWidget(self.row_wifi)
         self.row_wifi.setVisible(False)
+        self.lbl_wifi_hint = QLabel("")
+        self.lbl_wifi_hint.setWordWrap(True)
+        self.lbl_wifi_hint.setStyleSheet("color: #a15c00;")
+        self.lbl_wifi_hint.setVisible(False)
+        root.addWidget(self.lbl_wifi_hint)
+
+    def _build_row_mac(self, root: QVBoxLayout) -> None:
+        # MAC BLE-прибора для записи в NVS (только проекты с supports_esphome_mac)
+        self.row_mac = QWidget()
+        row = QHBoxLayout(self.row_mac)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("MAC прибора (AA:BB:CC:DD:EE:FF):"))
+        self.txt_mac = QLineEdit()
+        self.txt_mac.setPlaceholderText("AA:BB:CC:DD:EE:FF")
+        self.txt_mac.setMaximumWidth(200)
+        row.addWidget(self.txt_mac)
+        hint = QLabel("необязательно: можно задать позже в Web UI платы")
+        hint.setStyleSheet("color: #666666;")
+        row.addWidget(hint)
+        row.addStretch(1)
+        root.addWidget(self.row_mac)
+        self.row_mac.setVisible(False)
 
     def _wifi_nvs_segment(self, prj: Project) -> Project:
         # Добавляет в проект сегмент NVS с Wi-Fi сетью, если нужно
-        if prj.wifi_nvs_offset is None:
+        if (prj.wifi_nvs_offset is None and not prj.supports_esphome_wifi
+                and not prj.supports_esphome_mac):
             return prj
         # #RADEX-186 шаг Б: в режиме обновления раздел nvs не трогаем вовсе —
         # записать туда сеть значило бы стереть остальные настройки платы
@@ -177,6 +203,8 @@ class MainWindow(QMainWindow):
         # и существует.
         if getattr(self, '_update_mode', False):
             return prj
+        if prj.supports_esphome_wifi or prj.supports_esphome_mac:
+            return self._esphome_nvs_segment(prj)
         if not self.chk_wifi.isChecked():
             return prj
         ssid = self.txt_wifi_ssid.text().strip()
@@ -201,6 +229,29 @@ class MainWindow(QMainWindow):
         import dataclasses as _dc
         from .projects import FlashSegment
         return _dc.replace(prj, segments=prj.segments + (FlashSegment(prj.wifi_nvs_offset, nvs_path),))
+
+    def _esphome_key_asset(self, prj: Project) -> object | None:
+        if not prj.supports_esphome_wifi or self._release is None:
+            return None
+        return next((a for a in self._release.assets
+                     if a.name == prj.esphome_wifi_key_asset), None)
+
+    def _refresh_wifi_availability(self) -> None:
+        prj: Project | None = self.cbo_project.currentData()
+        if prj is None or not prj.supports_esphome_wifi:
+            return
+        have = self._esphome_key_asset(prj) is not None
+        if have and not self.chk_wifi.isEnabled():
+            self.chk_wifi.setChecked(True)
+        if not have:
+            self.chk_wifi.setChecked(False)
+        for w in (self.chk_wifi, self.txt_wifi_ssid, self.txt_wifi_pass):
+            w.setEnabled(have)
+        show = (not have) and self._release is not None
+        hint = ("В этой версии прошивки запись Wi-Fi недоступна (нет файла ключа в релизе). "
+                "Прошивка будет работать: плата поднимет свою точку доступа для настройки с телефона.")
+        self.lbl_wifi_hint.setText(hint if show else "")
+        self.lbl_wifi_hint.setVisible(show)
 
     def _build_row_install(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
@@ -269,7 +320,17 @@ class MainWindow(QMainWindow):
         self.cbo_version.setEnabled(False)
         self.btn_install.setEnabled(True)
         self.row_reboot.setVisible(bool(prj.pre_flash_http_reboot))
-        self.row_wifi.setVisible(prj.wifi_nvs_offset is not None)
+        self.row_wifi.setVisible(
+            prj.wifi_nvs_offset is not None or prj.supports_esphome_wifi)
+        self.row_mac.setVisible(prj.supports_esphome_mac)
+        # Возврат полей в рабочее состояние (после ESPHome-проекта без ключа);
+        # для ESPHome доступность решит _refresh_wifi_availability по релизу.
+        for w in (self.chk_wifi, self.txt_wifi_ssid, self.txt_wifi_pass):
+            w.setEnabled(True)
+        self.lbl_wifi_hint.setText("")
+        self.lbl_wifi_hint.setVisible(False)
+        if prj.supports_esphome_wifi:
+            self._refresh_wifi_availability()
         # #RADEX-186 шаг Б: режим обновления есть только у проектов с отдельным
         # файлом приложения в релизе; у ESPHome-прошивок его нет.
         self.chk_update.setVisible(prj.supports_update)
@@ -308,6 +369,7 @@ class MainWindow(QMainWindow):
         self.cbo_version.blockSignals(False)
         self.cbo_version.setEnabled(True)
         self._release = releases_list[0]
+        self._refresh_wifi_availability()
         self.lbl_firmware.setText(f"релизов: {len(releases_list)}")
         self.btn_install.setEnabled(True)
 
@@ -315,9 +377,11 @@ class MainWindow(QMainWindow):
         rel = self.cbo_version.currentData()
         if rel is not None:
             self._release = rel
+            self._refresh_wifi_availability()
 
     def _on_fetch_error(self, msg: str) -> None:
         self._release = None
+        self._refresh_wifi_availability()
         self.lbl_firmware.setText("нет соединения")
         self._log(f"[fetch] ошибка: {msg}")
         QMessageBox.critical(
@@ -351,6 +415,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Установка",
                                  "Прошивка не загружена. Проверьте соединение.")
             return
+        if prj.supports_esphome_mac and self.txt_mac.text().strip():
+            from .esphome_wifi import parse_mac
+            try:
+                parse_mac(self.txt_mac.text())
+            except Exception as e:
+                self.btn_install.setEnabled(True)
+                QMessageBox.warning(self, "Установка", f"MAC прибора: {e}")
+                return
         # #RADEX-186 шаг Б: что шьём — полный образ или только приложение.
         # Взаимоисключающе с «Полным сбросом»: тот стирает флеш целиком, и
         # сохранять настройки после него нечего.
@@ -514,3 +586,4 @@ class MainWindow(QMainWindow):
                 self._fetch_worker.quit()
                 self._fetch_worker.wait(2000)
         super().closeEvent(e)
+

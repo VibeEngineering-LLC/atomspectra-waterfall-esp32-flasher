@@ -50,6 +50,17 @@ class Project:
     app_asset_name: str = ""
     app_offset: int = 0x20000
 
+    # Wi-Fi для ESPHome-прошивок: имя ассета релиза с ключом
+    # {"esphome_wifi_pref_key": N}, смещение и размер раздела nvs. Пустое имя
+    # или offset None - проект так не умеет. Отдельно от wifi_nvs_offset
+    # (формат Radex: namespace wifi), смешивать нельзя.
+    esphome_wifi_key_asset: str = ""
+    esphome_nvs_offset: int | None = None
+    esphome_nvs_size: int = 0x70000
+    # Ключ NVS глобала с MAC BLE-прибора (зависит только от id глобала в
+    # прошивке, не от релиза). None - проект запись MAC не умеет.
+    esphome_mac_pref_key: int | None = None
+
     def resolve(self, bin_path: Path) -> tuple[FlashSegment, ...]:
         if self.segments_from_factory:
             return (FlashSegment(0x0, bin_path),)
@@ -63,6 +74,14 @@ class Project:
     @property
     def supports_update(self) -> bool:
         return bool(self.app_asset_name)
+
+    @property
+    def supports_esphome_wifi(self) -> bool:
+        return bool(self.esphome_wifi_key_asset) and self.esphome_nvs_offset is not None
+
+    @property
+    def supports_esphome_mac(self) -> bool:
+        return self.esphome_mac_pref_key is not None and self.esphome_nvs_offset is not None
 
 
 # Реестр проектов
@@ -115,6 +134,14 @@ PROJECT_REGISTRY = {
         github_repo="VibeEngineering-LLC/atomfast-esp32",
         factory_asset_name="atomfast-gw-s3.factory.bin",
         segments_from_factory=True,
+        # Wi-Fi в NVS для ESPHome: ключ у каждого релиза свой, лежит отдельным
+        # ассетом. Смещение/размер - из таблицы разделов сборки (раздел nvs в
+        # образе по 0x8080: 0x390000 / 0x70000). НЕ 0x9000 - там otadata.
+        esphome_wifi_key_asset="atomfast-gw-s3.wifi-key.json",
+        esphome_nvs_offset=0x390000,
+        esphome_nvs_size=0x70000,
+        esphome_mac_pref_key=2763962759,
+        next_steps="Если вы заполнили поля Wi-Fi перед прошивкой, плата уже знает вашу сеть: включите её и через несколько секунд откройте Web UI - http://atomfast-gw-s3.local/.\nЕсли сеть НЕ задавалась (или полей Wi-Fi не было), настройка Wi-Fi: после включения плата поднимет свою точку доступа AtomFast-S3 Fallback (пароль 12345678). Подключитесь к ней с телефона, откроется страница настройки (если нет - зайдите на http://192.168.4.1), выберите домашнюю сеть 2.4 ГГц и введите пароль.\nПосле подключения к домашней сети точка доступа гаснет. Web UI: http://atomfast-gw-s3.local/ (или IP платы из списка клиентов роутера).\nУчётные данные по умолчанию - смените после настройки: Web UI admin / admin, OTA-пароль esphome_ota; ключ шифрования API в образе нулевой, для домашней сети это допустимо.\nПрибор: если MAC AtomFast был задан во флешере, плата подключится к прибору сама (включите прибор рядом с платой). Если нет - введите MAC в Web UI платы (поле \"MAC прибора AtomFast\"), плата перезагрузится и подключится.",
     ),
     # Radex MR107ion (радон) через BLE или USB-кабель. Прошивка ESP-IDF
     # (radex-esp32 v1.13+), плата ESP32-S3-DevKitC-1 N16R8 (16 MB флеша,
