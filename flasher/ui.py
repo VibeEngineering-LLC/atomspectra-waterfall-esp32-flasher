@@ -27,14 +27,15 @@ class FetchWorker(QThread):
     done = Signal(object)   # list[FirmwareRelease], новые первыми
     error = Signal(str)
 
-    def __init__(self, owner_repo: str, asset_name: str) -> None:
+    def __init__(self, owner_repo: str, asset_name: str, sums_asset: str = "") -> None:
         super().__init__()
         self._owner_repo = owner_repo
         self._asset_name = asset_name
+        self._sums_asset = sums_asset
 
     def run(self) -> None:
         try:
-            releases = fetch_releases(self._owner_repo, self._asset_name)
+            releases = fetch_releases(self._owner_repo, self._asset_name, self._sums_asset)
             self.done.emit(releases)
         except (NetworkError, ReleaseNotFoundError) as e:
             self.error.emit(str(e))
@@ -213,22 +214,14 @@ class MainWindow(EsphomeNvsMixin, QMainWindow):
         password = self.txt_wifi_pass.text()
         settings = QSettings("VibeEngineering-LLC", "esp32-flasher")
         settings.setValue("wifi/last_ssid", ssid)
-        # Импорт вне try: иначе при неудачном импорте (пакета нет в сборке)
-        # имя WifiNvsError не определено и except падает с NameError.
+        # NVS-образ собирается в памяти и вклеивается в КОПИЮ factory (T-33: иначе
+        # esptool видит перекрытие 0x9000); копию с паролем flash() удаляет сам (T-32).
         try:
-            from .wifi_nvs import build_wifi_nvs, WifiNvsError
+            from .wifi_flash import prepare_wifi_nvs
         except Exception as e:
             self._log(f"[wifi] генератор NVS недоступен, сеть не записываю: {e}")
             return prj
-        try:
-            nvs_path = build_wifi_nvs(ssid, password)
-        except WifiNvsError as e:
-            self._log(f"[wifi] не записываю сеть: {e}")
-            return prj
-        self._log(f"[wifi] сеть '{ssid}' будет записана в плату")
-        import dataclasses as _dc
-        from .projects import FlashSegment
-        return _dc.replace(prj, segments=prj.segments + (FlashSegment(prj.wifi_nvs_offset, nvs_path),))
+        return prepare_wifi_nvs(prj, ssid, password, self._log)
 
     def _esphome_key_asset(self, prj: Project) -> object | None:
         if not prj.supports_esphome_wifi or self._release is None:
@@ -350,7 +343,8 @@ class MainWindow(EsphomeNvsMixin, QMainWindow):
             if self._fetch_worker.isRunning():
                 self._fetch_worker.quit()
                 self._fetch_worker.wait(1000)
-        self._fetch_worker = FetchWorker(prj.github_repo, prj.factory_asset_name)
+        self._fetch_worker = FetchWorker(prj.github_repo, prj.factory_asset_name,
+                                    prj.sums_asset_name)
         self._fetch_worker.done.connect(self._on_fetch_done)
         self._fetch_worker.error.connect(self._on_fetch_error)
         self._fetch_worker.start()

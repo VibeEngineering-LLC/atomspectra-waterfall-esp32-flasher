@@ -51,4 +51,4 @@ class EsphomeNvsMixin:
 
         self._log(f"[nvs] в плату будет записано: {', '.join(parts)} (NVS {hex(prj.esphome_nvs_offset)}, {hex(prj.esphome_nvs_size)})")
 
-        return _dc.replace(prj, segments=prj.segments + (FlashSegment(prj.esphome_nvs_offset, nvs_path),))
+        return _dc.replace(prj, segments=prj.segments + (FlashSegment(prj.esphome_nvs_offset, nvs_path, True),))

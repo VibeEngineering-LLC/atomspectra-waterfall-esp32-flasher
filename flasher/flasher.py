@@ -12,6 +12,7 @@ except ImportError:
     esptool = None
 
 from .projects import Project
+from .wifi_flash import wipe_secret_segments
 
 LogCB = Callable[[str], None]
 
@@ -93,6 +94,16 @@ def erase(project: Project, port: str, log: LogCB, baud: int = 460800) -> bool:
 def flash(project: Project, port: str, log: LogCB, baud: int = 921600,
           erase_first: bool = False,
           phase: LogCB | None = None) -> bool:
+    """Запись образов. Временные файлы с паролем Wi-Fi (seg.secret) затираются и
+    удаляются при ЛЮБОМ исходе: успех, ошибка esptool, ранний отказ."""
+    try:
+        return _flash_impl(project, port, log, baud, erase_first, phase)
+    finally:
+        wipe_secret_segments(project.segments)
+
+
+def _flash_impl(project: Project, port: str, log: LogCB, baud: int,
+                erase_first: bool, phase: LogCB | None) -> bool:
     for seg in project.segments:
         if not seg.path.is_file():
             log(f"[ОШИБКА] нет файла: {seg.path}")

@@ -8,6 +8,9 @@ from pathlib import Path
 class FlashSegment:
     offset: int
     path: Path
+    # secret=True: файл — временная копия/образ с паролем Wi-Fi; flash() удаляет
+    # его (с затиранием) в finally, при любом исходе записи.
+    secret: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,14 @@ class Project:
     # captive-портал был не нужен. None — проект так не умеет (у ESPHome-
     # прошивок своя схема хранения, этот формат туда не подходит).
     wifi_nvs_offset: int | None = None
+    # Размер раздела nvs и дополнительные u8-ключи namespace wifi (T-33/AtomFast
+    # IDF: unver=1 - сеть «не проверена», при опечатке в пароле плата вернётся в
+    # портал настройки). У Radex пусто.
+    wifi_nvs_size: int = 0x6000
+    wifi_nvs_extra_u8: tuple[tuple[str, int], ...] = ()
+    # Ассет со списком SHA-256 релиза (формат sha256sum). Непусто - SHA берётся
+    # оттуда, релиз без записи об образе в список не попадает.
+    sums_asset_name: str = ""
 
     # #RADEX-186 шаг Б: ассет ТОЛЬКО приложения и его смещение. Полный образ
     # непрерывен от 0x0, и в его диапазон попадает раздел nvs — заливка на уже
@@ -142,6 +153,33 @@ PROJECT_REGISTRY = {
         esphome_nvs_size=0x70000,
         esphome_mac_pref_key=2763962759,
         next_steps="Если вы заполнили поля Wi-Fi перед прошивкой, плата уже знает вашу сеть: включите её и через несколько секунд откройте Web UI - http://atomfast-gw-s3.local/.\nЕсли сеть НЕ задавалась (или полей Wi-Fi не было), настройка Wi-Fi: после включения плата поднимет свою точку доступа AtomFast-S3 Fallback (пароль 12345678). Подключитесь к ней с телефона, откроется страница настройки (если нет - зайдите на http://192.168.4.1), выберите домашнюю сеть 2.4 ГГц и введите пароль.\nПосле подключения к домашней сети точка доступа гаснет. Web UI: http://atomfast-gw-s3.local/ (или IP платы из списка клиентов роутера).\nУчётные данные по умолчанию - смените после настройки: Web UI admin / admin, OTA-пароль esphome_ota; ключ шифрования API в образе нулевой, для домашней сети это допустимо.\nПрибор: если MAC AtomFast был задан во флешере, плата подключится к прибору сама (включите прибор рядом с платой). Если нет - введите MAC в Web UI платы (поле \"MAC прибора AtomFast\"), плата перезагрузится и подключится.",
+    ),
+    # AtomFast на ESP32-S3 (ESP-IDF, не ESPHome): factory.bin собирается merge_bin
+    # и кладётся в релиз вместе с SHA256SUMS.txt. Wi-Fi - namespace wifi (ssid,
+    # pass, unver), раздел nvs 0x9000/0x6000 (partitions.csv прошивки).
+    "atomfast-gateway-idf": Project(
+        key="atomfast-gateway-idf",
+        title="AtomFast Gateway, ESP-IDF (ESP32-S3 N16R8)",
+        chip="esp32s3",
+        flash_mode="dio",
+        flash_freq="80m",
+        flash_size="detect",
+        before="default_reset",
+        after="hard_reset",
+        stub=True,
+        segments=(),  # Будет заменён в resolve
+        github_repo="VibeEngineering-LLC/atomfast-esp32",
+        factory_asset_name="atomfast_gw.factory.bin",
+        segments_from_factory=True,
+        wifi_nvs_offset=0x9000,
+        wifi_nvs_size=0x6000,
+        wifi_nvs_extra_u8=(("unver", 1),),
+        sums_asset_name="SHA256SUMS.txt",
+        # Режим «Обновление: сохранить настройки»: только приложение (ota_0 @0x20000,
+        # раздел 0x200000), nvs с сетью и параметрами не затирается (T-1 п.2, W-065).
+        app_asset_name="atomfast_gw.bin",
+        app_offset=0x20000,
+        next_steps="Если вы заполнили поля Wi-Fi перед прошивкой, плата уже знает вашу сеть: включите её и откройте Web UI платы (адрес покажет роутер в списке клиентов). Web UI открывается без пароля - держите плату только в доверенной домашней сети.\nЕсли сеть НЕ задавалась, плата поднимет точку доступа atomfast-gw-setup: подключитесь к ней с телефоном, откроется страница настройки, выберите домашнюю сеть 2.4 ГГц и введите пароль.\nЕсли пароль введён с опечаткой, плата сама вернётся в режим настройки через пару минут.",
     ),
     # Radex MR107ion (радон) через BLE или USB-кабель. Прошивка ESP-IDF
     # (radex-esp32 v1.13+), плата ESP32-S3-DevKitC-1 N16R8 (16 MB флеша,

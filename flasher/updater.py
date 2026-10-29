@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -58,7 +59,34 @@ def _parse_release(data: dict) -> FirmwareRelease:
     return FirmwareRelease(tag, tuple(assets), body)
 
 
-def fetch_releases(owner_repo: str, asset_name: str) -> list[FirmwareRelease]:
+_SUMS_LINE = re.compile(r"^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$")
+
+
+def parse_sha256sums(text: str) -> dict[str, str]:
+    """Разбор SHA256SUMS.txt (формат sha256sum): имя файла -> sha256 (нижний регистр)."""
+    sums: dict[str, str] = {}
+    for line in text.splitlines():
+        m = _SUMS_LINE.match(line.strip())
+        if m:
+            sums[m.group(2)] = m.group(1).lower()
+    return sums
+
+
+def _apply_sums(release: FirmwareRelease, asset_name: str, sums_name: str) -> FirmwareRelease | None:
+    """Берёт SHA образов из ассета-списка. Нет списка или записи об образе - None
+    (релиз без проверяемой суммы не показываем)."""
+    sums_asset = next((a for a in release.assets if a.name == sums_name), None)
+    if sums_asset is None:
+        return None
+    sums = parse_sha256sums(fetch_text_asset(sums_asset))
+    if asset_name not in sums:
+        return None
+    assets = tuple(a._replace(sha256=sums.get(a.name, a.sha256)) for a in release.assets)
+    return release._replace(assets=assets)
+
+
+def fetch_releases(owner_repo: str, asset_name: str,
+                   sums_asset: str = "") -> list[FirmwareRelease]:
     """Релизы репозитория, в которых есть asset с именем asset_name.
 
     Порядок — как отдаёт GitHub API (новые первыми). Берутся только
@@ -84,6 +112,10 @@ def fetch_releases(owner_repo: str, asset_name: str) -> list[FirmwareRelease]:
         for data in response.json():
             release = _parse_release(data)
             if any(a.name == asset_name for a in release.assets):
+                if sums_asset:
+                    release = _apply_sums(release, asset_name, sums_asset)
+                    if release is None:
+                        continue
                 releases.append(release)
     except (ValueError, KeyError, TypeError) as e:
         # ValueError покрывает JSONDecodeError (его подкласс)
